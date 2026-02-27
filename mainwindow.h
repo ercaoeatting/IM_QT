@@ -19,12 +19,16 @@ class MainWindow : public QMainWindow {
 public:
     MainWindow(QWidget* parent = nullptr, ChatClient* client = nullptr);
     ~MainWindow();
+
+protected:
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 private slots:
 
-    void on_buttonRefresh_clicked();
 
     void on_buttonSend_clicked();
+
+    void on_buttonFind_clicked();
 
 private:
     Ui::MainWindow* ui;

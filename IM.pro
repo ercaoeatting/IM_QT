@@ -12,17 +12,20 @@ SOURCES += \
     chatclient.cpp \
     dialog.cpp \
     main.cpp \
-    mainwindow.cpp
+    mainwindow.cpp \
+    searchdialog.cpp
 
 HEADERS += \
     chatclient.h \
     dialog.h \
     json.h \
-    mainwindow.h
+    mainwindow.h \
+    searchdialog.h
 
 FORMS += \
     dialog.ui \
-    mainwindow.ui
+    mainwindow.ui \
+    searchdialog.ui
 
 TRANSLATIONS += \
     IM_zh_CN.ts

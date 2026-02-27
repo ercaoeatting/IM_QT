@@ -13,6 +13,9 @@
   <property name="windowTitle">
    <string>MainWindow</string>
   </property>
+  <property name="styleSheet">
+   <string notr="true"/>
+  </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QHBoxLayout" name="horizontalLayout_2">
     <item>
@@ -35,12 +38,15 @@
            </widget>
           </item>
           <item>
-           <widget class="QPushButton" name="buttonRefresh">
+           <widget class="QPushButton" name="buttonFind">
             <property name="styleSheet">
-             <string notr="true">image: url(:/icon/refresh.ico);</string>
+             <string notr="true"/>
             </property>
             <property name="text">
              <string/>
+            </property>
+            <property name="icon">
+             <iconset theme="QIcon::ThemeIcon::EditFind"/>
             </property>
            </widget>
           </item>
@@ -159,28 +165,21 @@
      <x>0</x>
      <y>0</y>
      <width>1056</width>
-     <height>26</height>
+     <height>22</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuExit">
-    <property name="title">
-     <string>退出登录</string>
-    </property>
-   </widget>
-   <widget class="QMenu" name="menuReconnect">
-    <property name="title">
-     <string>重新连接</string>
-    </property>
-   </widget>
-   <widget class="QMenu" name="menu">
     <property name="title">
      <string>退出程序</string>
     </property>
    </widget>
    <addaction name="menuExit"/>
-   <addaction name="menuReconnect"/>
-   <addaction name="menu"/>
   </widget>
+  <action name="actionexit">
+   <property name="text">
+    <string>exit</string>
+   </property>
+  </action>
  </widget>
  <resources/>
  <connections/>

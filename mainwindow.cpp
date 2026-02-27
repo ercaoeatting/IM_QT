@@ -8,13 +8,15 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonParseError>
-
-#include "qobject.h"
-#include "qstringview.h"
+#include <QKeyEvent>
+#include <QAction>
+#include <QObject>
+#include <QStringView>
+#include "qicon.h"
+#include "qmenu.h"
 #include "ui_mainwindow.h"
 #include "mainwindow.h"
-#include "ui_mainwindow.h"
-#include "mainwindow.h"
+#include "searchdialog.h"
 static void parseMsgPrefix(const QString& raw, bool& isMe, QString& plain)
 {
     QString s = raw.trimmed();
@@ -70,6 +72,27 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
 {
     ui->setupUi(this);
     ui->splitter->setSizes(QList<int>{1, 2});
+    this->setWindowIcon(QIcon(":/icon/group.png"));
+    ui->buttonSend->setStyleSheet("QPushButton {"
+                                  "    background-color: #07C160;"
+                                  "    color: white;"
+                                  "    border-radius: 4px;"
+                                  "    border: none;"
+                                  "    padding: 6px 15px;"
+                                  "}"
+                                  "QPushButton:hover {"
+                                  "    background-color: #06AD56;"
+                                  "}"
+                                  "QPushButton:disabled {"
+                                  "    background-color: #E5E5E5;"
+                                  "    color: #B2B2B2;"
+                                  "}");
+
+    ui->buttonSend->setEnabled(false);
+    connect(ui->textEditInput, &QTextEdit::textChanged, this, [this]() {
+        QString text = ui->textEditInput->toPlainText().trimmed();
+        ui->buttonSend->setEnabled(!text.isEmpty());
+    });
     m_client->setParent(this);
     m_client->getList();
     QString title = QString("Chat - [%1] %2 已登录").arg(m_client->m_userId).arg(m_client->m_name);
@@ -103,8 +126,20 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
         m_chatWithId      = peerId;
         m_chatWithName    = peerName;
         switchChat(peerId, peerName);
-        ui->chatWith->setText(
-            QString(" [%1] %2 ").arg(peerId == 9999 ? "" : QString::number(peerId)).arg(peerName));
+        if (peerId == 9999) {
+            setWindowTitle(QString("Chat - [%1] %2 已登录 - 群聊大厅")
+                               .arg(m_client->m_userId)
+                               .arg(m_client->m_name));
+            ui->chatWith->setText(" [🌐] 群聊大厅 ");
+        }
+        else {
+            setWindowTitle(QString("Chat - [%1] %2 已登录 - 正在和 [%3] %4 聊天")
+                               .arg(m_client->m_userId)
+                               .arg(m_client->m_name)
+                               .arg(peerId)
+                               .arg(peerName));
+            ui->chatWith->setText(QString(" [%1] %2 ").arg(QString::number(peerId)).arg(peerName));
+        }
     });
     connect(m_client, &ChatClient::groupMessageReceived, this, [this](const QString& text) {
         QString message = QString("%1").arg(text.toHtmlEscaped());
@@ -129,6 +164,11 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
             });
     connect(ui->chat->model(), &QAbstractItemModel::rowsInserted, ui->chat,
             &QListWidget::scrollToBottom);
+    ui->textEditInput->installEventFilter(this);
+    // 菜单：退出程序
+    QAction* exitAction = new QAction("退出程序", this);
+    ui->menuExit->addAction(exitAction);
+    connect(exitAction, &QAction::triggered, this, []() { QApplication::quit(); });
 }
 
 MainWindow::~MainWindow()
@@ -160,6 +200,19 @@ void MainWindow::resizeEvent(QResizeEvent* event)
             item->setSizeHint(QSize(ui->chat->viewport()->width(), widget->sizeHint().height()));
         }
     }
+}
+bool MainWindow::eventFilter(QObject* watched, QEvent* event)
+{
+    // 按下ctrl+enter键发送消息
+    if (watched == ui->textEditInput && event->type() == QEvent::KeyPress) {
+        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Return &&
+            keyEvent->modifiers().testFlag(Qt::ControlModifier)) {
+            on_buttonSend_clicked();
+            return true;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 void MainWindow::createSingleMessageWidget(const QString& otext)
 {
@@ -212,10 +265,10 @@ void MainWindow::createSingleMessageWidget(const QString& otext)
     item->setSizeHint(QSize(0, container->sizeHint().height()));
 }
 
-void MainWindow::on_buttonRefresh_clicked()
-{
-    m_client->getList();
-}
+// void MainWindow::on_buttonFind_clicked()
+// {
+//     m_client->getList();
+// }
 
 void MainWindow::on_buttonSend_clicked()
 {
@@ -234,4 +287,22 @@ void MainWindow::on_buttonSend_clicked()
     else {
         m_client->sendPrivateText(m_chatWithId, text);
     }
+}
+
+void MainWindow::on_buttonFind_clicked()
+{
+    if (m_chatWithId == 0) {
+        QMessageBox::information(this, "提示", "请先选择一个聊天对象");
+        return;
+    }
+
+    if (!m_client->m_history.contains(m_chatWithId) ||
+        m_client->m_history.at(m_chatWithId).empty()) {
+        QMessageBox::information(this, "提示", "当前没有聊天记录");
+        return;
+    }
+
+    const auto&  currentHistory = m_client->m_history.at(m_chatWithId);
+    SearchDialog dlg(currentHistory, m_chatWithName, this);
+    dlg.exec();
 }
