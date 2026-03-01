@@ -11,6 +11,7 @@ CONFIG += c++20
 SOURCES += \
     chatclient.cpp \
     dialog.cpp \
+    filedialog.cpp \
     main.cpp \
     mainwindow.cpp \
     searchdialog.cpp
@@ -18,12 +19,14 @@ SOURCES += \
 HEADERS += \
     chatclient.h \
     dialog.h \
+    filedialog.h \
     json.h \
     mainwindow.h \
     searchdialog.h
 
 FORMS += \
     dialog.ui \
+    filedialog.ui \
     mainwindow.ui \
     searchdialog.ui
 

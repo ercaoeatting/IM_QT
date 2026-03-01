@@ -66,21 +66,6 @@ Controller (控制层)： switchChat 和 on_buttonSend_clicked。负责从 Model
   4. 期间利用`QProgressDialog` 提供模态的“正在登录...”反馈。
 - **本地偏好存储**使用`QSettings` 将上次登录成功的 IP、端口、账号信息序列化到本地（注册表或配置文件），提升用户体验。
 
-## 3. 主界面与 UI 渲染 (`MainWindow.cpp`)
-
-
-- **动态列表更新**使用`QTimer`定时器每秒触发一次`m_client->getList()`获取在线名单。通过监听`userListReceived`信号，动态刷新`QListWidget`，通过`Qt::UserRole` 中，避免直接解析 UI 文本。
-- **复杂气泡 UI 渲染** (`createSingleMessageWidget`)使用`QListWidget::setItemWidget` 注入自定义的组合控件。外层`QVBoxLayout`（垂直布局）放置时间/用户名栏与消息气泡。内层`QHBoxLayout`（水平布局）结合`addStretch(1)` 实现“自己发的消息靠右，别人发的消息靠左”。
-
-- **自适应宽度机制** 窗口尺寸改变会导致消息气泡排版混乱。程序通过重写`resizeEvent` 实现了完美响应：
-
-  ```c++ 
-  voidMainWindow::resizeEvent(QResizeEvent* event) {
-    // 当窗口被拉伸时，遍历所有气泡，强制将气泡最大宽度与当前视口 (viewport) 宽度绑定
-    // 确保长文本能够在缩放时自动换行并重新计算高度 (sizeHint)
-  }
-  ```
-
 - **自聊与状态同步优化 (SSOT )** &#x20;
 
   修复了“自己发给自己”时消息重复出现的问题。

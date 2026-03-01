@@ -1,4 +1,5 @@
 #include "chatclient.h"
+#include "qendian.h"
 #include <QtEndian>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -111,6 +112,14 @@ void ChatClient::onReadyRead()
             handleControlJson(payload);
             break;
         }
+        case TYPE::FILE_CTRL: {
+            handleFileCtlJson(payload);
+            break;
+        }
+        case TYPE::FILE_DATA: {
+            handleFile(payload);
+            break;
+        }
         default:
             break;
         }
@@ -178,6 +187,7 @@ void ChatClient::handlePrivateJson(const QByteArray& payload)
     emit privateMessageReceived(fromId, msg);
 }
 
+
 void ChatClient::handleControlJson(const QByteArray& payload)
 {
     QJsonObject obj;
@@ -212,4 +222,94 @@ void ChatClient::handleControlJson(const QByteArray& payload)
         emit serverError(obj.value("reason").toString());
         return;
     }
+}
+
+void ChatClient::handleFileCtlJson(const QByteArray& payload)
+{
+    QJsonObject obj;
+    if (!parseJsonObj(payload, obj)) return;
+
+    QString  cmd    = obj.value("cmd").toString();
+    uint32_t fromId = obj.value("from").toString().toUInt();
+    uint32_t taskId = (uint32_t)obj.value("taskId").toInt(); // 提取任务ID
+
+    if (cmd == "file_send_req") {
+        QString fileName = obj.value("fileName").toString();
+        int     fileSize = obj.value("fileSize").toInt();
+        emit    fileReqReceived(fromId, taskId, fileName, fileSize);
+    }
+    else if (cmd == "file_send_resp") {
+        QString fileName = obj.value("fileName").toString();
+        bool    accept   = obj.value("accept").toBool();
+        emit    fileRespReceived(fromId, taskId, fileName, accept);
+    }
+    else if (cmd == "file_send_deny") {
+        emit fileDenyReceived(fromId, taskId);
+    }
+}
+
+void ChatClient::handleFile(const QByteArray& payload)
+{
+    // 4字节fromId + 4字节taskId
+    if (payload.size() < 8) return;
+
+    uint32_t net_from_id, net_task_id;
+    memcpy(&net_from_id, payload.constData(), 4);
+    memcpy(&net_task_id, payload.constData() + 4, 4);
+
+    uint32_t   fromId   = qFromBigEndian(net_from_id);
+    uint32_t   taskId   = qFromBigEndian(net_task_id); // 哪个文件的数据块
+    QByteArray fileData = payload.mid(8);              // 后面数据
+    emit       fileDataReceived(fromId, taskId, fileData);
+}
+
+
+
+void ChatClient::sendFileReq(uint32_t toId, uint32_t taskId, const QString& fileName, int fileSize)
+{
+    QJsonObject obj;
+    obj["cmd"]      = "file_send_req";
+    obj["to"]       = QString::number(toId);
+    obj["taskId"]   = (qint64)taskId; // 塞入任务ID
+    obj["fileName"] = fileName;
+    obj["fileSize"] = fileSize;
+    sendFrame(TYPE::FILE_CTRL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+void ChatClient::sendFileResp(uint32_t toId, uint32_t taskId, const QString& fileName, int fileSize,
+                              bool accept)
+{
+    QJsonObject obj;
+    obj["cmd"]      = "file_send_resp";
+    obj["to"]       = QString::number(toId);
+    obj["taskId"]   = (qint64)taskId;
+    obj["fileName"] = fileName;
+    obj["fileSize"] = fileSize;
+    obj["accept"]   = accept;
+    sendFrame(TYPE::FILE_CTRL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+void ChatClient::sendFileDeny(uint32_t toId, uint32_t taskId)
+{
+    QJsonObject obj;
+    obj["cmd"]    = "file_send_deny";
+    obj["to"]     = QString::number(toId);
+    obj["taskId"] = (qint64)taskId;
+    sendFrame(TYPE::FILE_CTRL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+// 【核心魔法】二进制拼包：[4字节接收方ID] + [4字节任务ID] + [文件纯数据]
+void ChatClient::sendFileData(uint32_t toId, uint32_t taskId, const QByteArray& data)
+{
+    QByteArray payload;
+    payload.resize(8 + data.size()); // 头部变成了 8 个字节
+
+    uint32_t netToId   = qToBigEndian(toId);
+    uint32_t netTaskId = qToBigEndian(taskId); // 任务ID也要转成网络字节序
+
+    memcpy(payload.data(), &netToId, 4);
+    memcpy(payload.data() + 4, &netTaskId, 4); // 紧跟在后面
+    if (!data.isEmpty()) { memcpy(payload.data() + 8, data.constData(), data.size()); }
+
+    sendFrame(TYPE::FILE_DATA, payload);
 }

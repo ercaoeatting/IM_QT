@@ -12,38 +12,18 @@
 #include <QAction>
 #include <QObject>
 #include <QStringView>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
+#include "chatclient.h"
+#include "filedialog.h"
 #include "qicon.h"
 #include "qmenu.h"
+#include "qmessagebox.h"
 #include "ui_mainwindow.h"
 #include "mainwindow.h"
 #include "searchdialog.h"
-static void parseMsgPrefix(const QString& raw, bool& isMe, QString& plain)
-{
-    QString s = raw.trimmed();
-    isMe      = false;
-    plain     = s;
-    if (s.startsWith("[me]")) {
-        isMe  = true;
-        plain = s.mid(4).trimmed();
-        return;
-    }
-    // 匹配 [12345] 前缀
-    if (s.startsWith('[')) {
-        int r = s.indexOf(']');
-        if (r > 1) {
-            bool ok = false;
-            s.mid(1, r - 1).toUInt(&ok);
-            if (ok) {
-                isMe  = false;
-                plain = s.mid(r + 1).trimmed();
-                return;
-            }
-        }
-    }
-    // 没前缀当成对方消息
-    isMe  = false;
-    plain = s;
-}
+
 static void parseMsgDetails(const QString& raw, bool& isMe, QString& sender, QString& plain)
 {
     QString s = raw.trimmed();
@@ -71,7 +51,7 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
 
 {
     ui->setupUi(this);
-    ui->splitter->setSizes(QList<int>{1, 2});
+    // ui->splitter->setSizes(QList<int>{1, 2});
     this->setWindowIcon(QIcon(":/icon/group.png"));
     ui->buttonSend->setStyleSheet("QPushButton {"
                                   "    background-color: #07C160;"
@@ -103,6 +83,9 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, [this]() { m_client->getList(); });
     m_timer->start(1000);
+    // 错误弹窗
+    connect(m_client, &ChatClient::serverError, this,
+            [this](const QString& errorReson) { QMessageBox::critical(this, "错误", errorReson); });
     // 更新在线列表逻辑
     connect(m_client, &ChatClient::userListReceived, this,
             [this](const QVector<ChatClient::UserInfo>& users) {
@@ -112,7 +95,7 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
                 groupItem->setData(Qt::UserRole + 1, "group");
                 ui->listWidget->insertItem(0, groupItem);
                 for (const auto& u : users) {
-                    auto* item = new QListWidgetItem(QString("[%1] %2").arg(u.id).arg(u.name));
+                    auto* item = new QListWidgetItem(QString("🟢[%1] %2").arg(u.id).arg(u.name));
                     item->setData(Qt::UserRole, u.id);
                     item->setData(Qt::UserRole + 1, u.name);
                     ui->listWidget->addItem(item);
@@ -169,6 +152,52 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
     QAction* exitAction = new QAction("退出程序", this);
     ui->menuExit->addAction(exitAction);
     connect(exitAction, &QAction::triggered, this, []() { QApplication::quit(); });
+
+    // 文件
+    m_fileAll = new FileDialog(this);
+    connect(m_client, &ChatClient::fileReqReceived, this, &MainWindow::fileReqReceived);
+    connect(m_client, &ChatClient::fileRespReceived, this, &MainWindow::fileRespReceived);
+    connect(m_client, &ChatClient::fileDenyReceived, this, &MainWindow::fileDenyReceived);
+    connect(m_client, &ChatClient::fileDataReceived, this, &MainWindow::fileDataReceived);
+    connect(m_fileAll, &FileDialog::taskAccepted, this, [this](uint32_t taskId) {
+        if (m_taskId2FileTasks.find(taskId) == m_taskId2FileTasks.end()) return;
+        FileTask& task   = m_taskId2FileTasks[taskId];
+        QString savePath = QFileDialog::getSaveFileName(this, "选择保存位置", task.fileName);
+        if (savePath.isEmpty()) {
+            m_client->sendFileResp(task.userId, taskId, task.fileName, task.totalSize, false);
+            m_fileAll->updateStatus(taskId, "已取消保存");
+            return;
+        }
+        task.filePath = savePath;
+        task.file     = new QFile(savePath);
+        task.file->open(QIODevice::WriteOnly);
+        m_client->sendFileResp(task.userId, taskId, task.fileName, task.totalSize, true);
+        m_fileAll->updateStatus(taskId, "正在接收中...");
+    });
+
+    connect(m_fileAll, &FileDialog::taskRejected, this, [this](uint32_t taskId) {
+        if (m_taskId2FileTasks.find(taskId) == m_taskId2FileTasks.end()) return;
+        FileTask& task = m_taskId2FileTasks[taskId];
+        m_client->sendFileResp(task.userId, taskId, task.fileName, task.totalSize, false);
+        m_fileAll->updateStatus(taskId, "已拒绝");
+    });
+
+    connect(m_fileAll, &FileDialog::taskCanceled, this, [this](uint32_t taskId) {
+        if (m_taskId2FileTasks.find(taskId) == m_taskId2FileTasks.end()) return;
+        FileTask& task = m_taskId2FileTasks[taskId];
+        m_client->sendFileDeny(task.userId, taskId);
+        m_fileAll->updateStatus(taskId, "已手动取消");
+        if (task.sendTimer) {
+            task.sendTimer->stop();
+            task.sendTimer->deleteLater();
+            task.sendTimer = nullptr;
+        }
+        if (task.file) {
+            task.file->close();
+            task.file->deleteLater();
+            task.file = nullptr;
+        }
+    });
 }
 
 MainWindow::~MainWindow()
@@ -222,7 +251,7 @@ void MainWindow::createSingleMessageWidget(const QString& otext)
 
     auto*        item       = new QListWidgetItem(ui->chat);
     QWidget*     container  = new QWidget();
-    QVBoxLayout* mainLayout = new QVBoxLayout(container); // 改用垂直布局
+    QVBoxLayout* mainLayout = new QVBoxLayout(container);
     mainLayout->setContentsMargins(10, 5, 10, 5);
     mainLayout->setSpacing(2); // 信息栏和气泡紧凑一点
 
@@ -305,4 +334,153 @@ void MainWindow::on_buttonFind_clicked()
     const auto&  currentHistory = m_client->m_history.at(m_chatWithId);
     SearchDialog dlg(currentHistory, m_chatWithName, this);
     dlg.exec();
+}
+
+void MainWindow::on_buttonSendFile_clicked()
+{
+    if (m_chatWithId == m_client->m_userId) {
+        QMessageBox::warning(this, "提示", "请不要发送给自己！");
+        return;
+    }
+    if (m_chatWithId == 0) {
+        QMessageBox::warning(this, "提示", "请先在右侧选择一个好友！");
+        return;
+    }
+    if (m_chatWithId == 9999) {
+        QMessageBox::warning(this, "提示", "禁止群内传文件");
+        return;
+    }
+    QStringList filePaths =
+        QFileDialog::getOpenFileNames(this, "选择要发送的文件", "", "所有文件 (*.*)");
+    if (filePaths.isEmpty()) { return; }
+    for (const QString& filePath : filePaths) {
+        QFileInfo info(filePath);
+        if (!info.exists() || !info.isFile()) continue;
+        uint32_t taskId = generateTaskId();
+        FileTask task;
+        task.taskId                = taskId;
+        task.userId                = m_chatWithId;
+        task.fileName              = info.fileName();
+        task.filePath              = filePath;
+        task.totalSize             = info.size();
+        task.nowLoadSize           = 0;
+        task.isSend                = true;
+        task.file                  = nullptr;
+        m_taskId2FileTasks[taskId] = task;
+        m_fileAll->addTask(taskId, task.fileName, task.totalSize, true);
+        m_client->sendFileReq(m_chatWithId, taskId, task.fileName, task.totalSize);
+    }
+
+    m_fileAll->show();
+    m_fileAll->raise();
+}
+
+
+
+void MainWindow::fileReqReceived(uint32_t fromId, uint32_t taskId, const QString& fileName,
+                                 int fileSize)
+{
+    FileTask task;
+    task.taskId                = taskId;
+    task.userId                = fromId;
+    task.fileName              = fileName;
+    task.totalSize             = fileSize;
+    task.nowLoadSize           = 0;
+    task.isSend                = false;
+    task.file                  = nullptr;
+    task.sendTimer             = nullptr;
+    m_taskId2FileTasks[taskId] = task;
+    m_fileAll->addTask(taskId, fileName, fileSize, false);
+    m_fileAll->show();
+}
+
+void MainWindow::fileRespReceived(uint32_t fromId, uint32_t taskId, const QString& fileName,
+                                  bool accept)
+{
+    auto it = m_taskId2FileTasks.find(taskId);
+    if (it == m_taskId2FileTasks.end()) return;
+    FileTask& task = it->second;
+
+    if (!accept) {
+        m_fileAll->updateStatus(taskId, "对方已拒绝");
+        return;
+    }
+
+    m_fileAll->updateStatus(taskId, "正在发送中...");
+    task.file = new QFile(task.filePath);
+    if (!task.file->open(QIODevice::ReadOnly)) {
+        m_fileAll->updateStatus(taskId, "读取本地文件失败！");
+        return;
+    }
+
+    task.sendTimer = new QTimer(this);
+    connect(task.sendTimer, &QTimer::timeout, this, [this, taskId]() {
+        auto it = m_taskId2FileTasks.find(taskId);
+        if (it == m_taskId2FileTasks.end()) return;
+        FileTask& t = it->second;
+        if (!t.file || !t.file->isOpen()) {
+            t.sendTimer->stop();
+            return;
+        }
+        QByteArray chunk = t.file->read(64 * 1024);
+        if (chunk.isEmpty()) return;
+        m_client->sendFileData(t.userId, taskId, chunk);
+        t.nowLoadSize += chunk.size();
+        m_fileAll->updateProgress(taskId, t.nowLoadSize, t.totalSize);
+        if (t.nowLoadSize >= t.totalSize) {
+            t.sendTimer->stop();
+            t.file->close();
+            t.file->deleteLater();
+            t.file = nullptr;
+            m_fileAll->updateStatus(taskId, "发送完成！");
+            createSingleMessageWidget(QString("[me] 文件发送完成: %1").arg(t.fileName));
+        }
+    });
+
+    task.sendTimer->start(1);
+}
+
+void MainWindow::fileDenyReceived(uint32_t fromId, uint32_t taskId)
+{
+    m_fileAll->updateStatus(taskId, "对方已取消");
+    auto it = m_taskId2FileTasks.find(taskId);
+    if (it != m_taskId2FileTasks.end()) {
+        if (it->second.file) {
+            it->second.file->close();
+            it->second.file->deleteLater();
+            it->second.file = nullptr;
+        }
+        if (it->second.sendTimer) {
+            it->second.sendTimer->stop();
+            it->second.sendTimer->deleteLater();
+            it->second.sendTimer = nullptr;
+        }
+    }
+}
+
+void MainWindow::fileDataReceived(uint32_t fromId, uint32_t taskId, const QByteArray& data)
+{
+    auto it = m_taskId2FileTasks.find(taskId);
+    if (it == m_taskId2FileTasks.end()) return;
+    FileTask& task = it->second;
+
+    if (!task.file || !task.file->isOpen()) return;
+
+    task.file->write(data);
+
+    task.nowLoadSize += data.size();
+    m_fileAll->updateProgress(taskId, task.nowLoadSize, task.totalSize);
+
+    if (task.nowLoadSize >= task.totalSize) {
+        task.file->close();
+        task.file->deleteLater();
+        task.file = nullptr;
+        m_fileAll->updateStatus(taskId, "接收完成！");
+        createSingleMessageWidget(
+            QString("[%1] 发来的文件接收完毕: %2").arg(fromId).arg(task.fileName));
+    }
+}
+void MainWindow::on_pushButton_clicked()
+{
+    this->m_fileAll->show();
 }
