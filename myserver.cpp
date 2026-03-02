@@ -506,6 +506,58 @@ int main(int argc, char** argv)
                                 pushSendQueue(epfd, clients[to_fd->second], frame);
                             }
                         }
+                        else if (cmd == "get_group_files") {
+                            std::cout << "get_group_files cmd received" << std::endl;
+                            json out;
+                            out["cmd"]   = "group_files_list";
+                            out["files"] = json::array();
+                            if (std::filesystem::exists("./group_files")) {
+                                for (const auto& entry :
+                                     std::filesystem::directory_iterator("./group_files")) {
+                                    if (entry.is_regular_file()) {
+                                        json fInfo;
+                                        fInfo["name"] = entry.path().filename().string();
+                                        fInfo["size"] = entry.file_size();
+                                        out["files"].push_back(fInfo);
+                                    }
+                                }
+                            }
+                            std::string outs = out.dump();
+                            auto frame = packFrame((const DATA*)outs.data(), (DATA)TYPE::CONTROL,
+                                                   (int)outs.size());
+                            pushSendQueue(epfd, it->second, frame);
+                            continue;
+                        }
+                        else if (cmd == "pull_group_file") {
+                            std::string fileName = j["fileName"].get<std::string>();
+                            long        offset   = j["offset"];
+                            uint32_t    taskId =
+                                j.value("taskId", 0); // 【关键修复 1】：读取客户端传来的 taskId
+                            std::string path = "./group_files/" + fileName;
+
+                            FILE* fp = fopen(path.c_str(), "rb");
+                            if (fp) {
+                                fseek(fp, offset, SEEK_SET);
+                                Buffer buf(72 + 64 * 1024);
+
+                                int netFrom = htonl(9999);
+                                int netTask =
+                                    htonl(taskId); // 【关键修复 2】：把 taskId 盖在包头上发回去！
+                                char nameBuf[64] = {0};
+
+                                memcpy(buf.data(), &netFrom, 4);
+                                memcpy(buf.data() + 4, &netTask, 4);
+                                memcpy(buf.data() + 8, nameBuf, 64);
+                                int n = fread(buf.data() + 72, 1, 64 * 1024, fp);
+                                fclose(fp);
+                                if (n > 0) {
+                                    auto frame =
+                                        packFrame(buf.data(), (DATA)TYPE::FILE_DATA, n + 72);
+                                    pushSendQueue(epfd, it->second, frame);
+                                }
+                            }
+                            continue;
+                        }
                     }
                     else if (type == (DATA)TYPE::FILE_DATA) {
                         // [二进制4字节 ID 客户端发过来是to_id
@@ -516,6 +568,21 @@ int main(int argc, char** argv)
                         memcpy(&net_id, dataBuffer.data(), 4);
                         uint32_t to_id = ntohl(net_id);
                         auto     to_fd = id2fd.find(to_id);
+
+                        if (to_id == 9999) {
+                            if (dataLen < 8 + 64) continue;
+                            char nameBuf[64] = {0};
+                            memcpy(nameBuf, dataBuffer.data() + 8, 64);
+                            std::string fileName(nameBuf);
+                            std::string safeName = std::to_string(it->second.id) + "_" + fileName;
+                            std::string path     = "./group_files/" + safeName;
+                            FILE*       fp       = fopen(path.c_str(), "ab");
+                            if (fp) {
+                                fwrite(dataBuffer.data() + 72, 1, dataLen - 72, fp);
+                                fclose(fp);
+                            }
+                            continue;
+                        }
                         if (to_fd != id2fd.end() && clients.find(to_fd->second) != clients.end()) {
                             int netFrom = htonl(it->second.id);
                             memcpy(dataBuffer.data(), &netFrom, 4);

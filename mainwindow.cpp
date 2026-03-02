@@ -165,9 +165,8 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
     connect(m_client, &ChatClient::fileDenyReceived, this, &MainWindow::fileDenyReceived);
     connect(m_client, &ChatClient::fileDataReceived, this, &MainWindow::fileDataReceived);
     connect(m_fileAll, &FileDialog::taskAccepted, this, [this](uint32_t taskId) {
-        auto it = m_taskId2FileTasks.find(taskId);
-        if (it == m_taskId2FileTasks.end()) return;
-        FileTask& task = it->second;
+        if (m_taskId2FileTasks.find(taskId) == m_taskId2FileTasks.end()) return;
+        FileTask& task = m_taskId2FileTasks[taskId];
 
         QString savePath = QFileDialog::getSaveFileName(
             this, task.userId == 9999 ? "保存群文件" : "选择保存位置", task.fileName);
@@ -187,7 +186,8 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
             QJsonObject obj;
             obj["cmd"]      = "pull_group_file";
             obj["fileName"] = task.fileName;
-            obj["offset"]   = 0; // 从头要
+            obj["offset"]   = 0;
+            obj["taskId"] = (qint64)taskId; // 【关键修复 3】：必须告诉服务器当前任务的 ID！
             m_client->sendFrame(TYPE::CONTROL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
         }
         else { // === 接收私聊文件 ===
@@ -199,14 +199,15 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
     connect(m_fileAll, &FileDialog::taskRejected, this, [this](uint32_t taskId) {
         if (m_taskId2FileTasks.find(taskId) == m_taskId2FileTasks.end()) return;
         FileTask& task = m_taskId2FileTasks[taskId];
-        m_client->sendFileResp(task.userId, taskId, task.fileName, task.totalSize, false);
+        if (task.userId != 9999)
+            m_client->sendFileResp(task.userId, taskId, task.fileName, task.totalSize, false);
         m_fileAll->updateStatus(taskId, "已拒绝");
     });
 
     connect(m_fileAll, &FileDialog::taskCanceled, this, [this](uint32_t taskId) {
         if (m_taskId2FileTasks.find(taskId) == m_taskId2FileTasks.end()) return;
         FileTask& task = m_taskId2FileTasks[taskId];
-        m_client->sendFileDeny(task.userId, taskId);
+        if (task.userId != 9999) m_client->sendFileDeny(task.userId, taskId);
         m_fileAll->updateStatus(taskId, "已手动取消");
         if (task.sendTimer) {
             task.sendTimer->stop();
@@ -219,25 +220,43 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
             task.file = nullptr;
         }
     });
-    // 在 MainWindow 收到信号后，把列表刷进 FileDialog
+
     connect(m_client, &ChatClient::groupFileListReceived, this, [this](const QJsonArray& files) {
         for (int i = 0; i < files.size(); ++i) {
-            QJsonObject f    = files[i].toObject();
-            QString     name = f["name"].toString();
-            int         size = f["size"].toInt();
+            QJsonObject f              = files[i].toObject();
+            QString     serverFileName = f["name"].toString(); // 比如："123456_作业.doc"
+            int         size           = f["size"].toInt();
 
-            // 我们随便生成个虚拟的任务 ID 用来追踪下载进度
-            uint32_t taskId = generateTaskId();
+            uint32_t taskId   = 0;
+            QString  realName = serverFileName;
+
+            // 1. 切割字符串，提取真正的 taskId 和 干净的文件名
+            int idx = serverFileName.indexOf('_');
+            if (idx != -1) {
+                taskId   = serverFileName.left(idx).toUInt();
+                realName = serverFileName.mid(idx + 1);
+            }
+            else {
+                taskId = qHash(serverFileName); // 兜底防爆：万一没下划线，用名字算个固定哈希
+            }
+
+
+
+            // 3. 确认是新任务，才登记并画到界面上
             FileTask task;
-            task.taskId                = taskId;
-            task.userId                = 9999;
-            task.fileName              = name;
-            task.totalSize             = size;
-            task.nowLoadSize           = 0;
-            task.isSend                = false;
+            task.taskId      = taskId;
+            task.userId      = 9999;
+            task.fileName    = realName; // 这里只存真实名字 "作业.doc"
+            task.totalSize   = size;
+            task.nowLoadSize = 0;
+            task.isSend      = false;
+            task.file        = nullptr;
+            task.sendTimer   = nullptr;
+
             m_taskId2FileTasks[taskId] = task;
 
-            m_fileAll->addTask(taskId, "[群文件] " + name, size, false); // 显示接收按钮
+            // 界面上显示的也是干净的文件名
+            m_fileAll->addTask(taskId, "[群文件] " + realName, size, false);
         }
     });
 }
@@ -387,11 +406,12 @@ void MainWindow::on_buttonSendFile_clicked()
         return;
     }
     if (m_chatWithId == 0) {
-        QMessageBox::warning(this, "提示", "请先在右侧选择对象！");
+        QMessageBox::warning(this, "提示", "请先在右侧选择一个好友或群聊！");
         return;
     }
 
-    QStringList filePaths = QFileDialog::getOpenFileNames(this, "选择文件", "", "所有 (*.*)");
+    QStringList filePaths =
+        QFileDialog::getOpenFileNames(this, "选择要发送的文件", "", "所有文件 (*.*)");
     if (filePaths.isEmpty()) return;
 
     for (const QString& filePath : filePaths) {
@@ -399,66 +419,68 @@ void MainWindow::on_buttonSendFile_clicked()
         if (!info.exists() || !info.isFile()) continue;
         uint32_t taskId = generateTaskId();
         FileTask task;
-        task.taskId                = taskId;
-        task.userId                = m_chatWithId;
-        task.fileName              = info.fileName();
-        task.filePath              = filePath;
-        task.totalSize             = info.size();
-        task.nowLoadSize           = 0;
-        task.isSend                = true;
-        task.file                  = nullptr;
-        task.sendTimer             = nullptr;
-        m_taskId2FileTasks[taskId] = task;
+        task.taskId      = taskId;
+        task.userId      = m_chatWithId;
+        task.fileName    = info.fileName();
+        task.filePath    = filePath;
+        task.totalSize   = info.size();
+        task.nowLoadSize = 0;
+        task.isSend      = true;
+        task.file        = nullptr;
+        task.sendTimer   = nullptr;
 
-        if (m_chatWithId == 9999) { // === 上传到群服务器 ===
-            m_fileAll->addTask(taskId, "[上传群] " + task.fileName, task.totalSize, true);
+        m_taskId2FileTasks[taskId] = task;
+        // 【关键修复】：获取 Map 里的引用，直接修改 Map 里的值，不要改局部变量！
+        FileTask& mapTask = m_taskId2FileTasks[taskId];
+
+        if (m_chatWithId == 9999) {
+            m_fileAll->addTask(taskId, "[群上传] " + mapTask.fileName, mapTask.totalSize, true);
             m_fileAll->updateStatus(taskId, "正在上传...");
 
-            QJsonObject obj;
-            obj["cmd"]      = "group_file_upload_req";
-            obj["taskId"]   = (qint64)taskId;
-            obj["fileName"] = task.fileName;
-            m_client->sendFrame(TYPE::CONTROL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
+            mapTask.file = new QFile(filePath);
+            mapTask.file->open(QIODevice::ReadOnly);
+            mapTask.sendTimer = new QTimer(this);
 
-            task.file = new QFile(filePath);
-            task.file->open(QIODevice::ReadOnly);
-            task.sendTimer = new QTimer(this);
-            connect(task.sendTimer, &QTimer::timeout, this, [this, taskId]() {
+            connect(mapTask.sendTimer, &QTimer::timeout, this, [this, taskId]() {
                 auto it = m_taskId2FileTasks.find(taskId);
-                if (it == m_taskId2FileTasks.end() || !it->second.file) return;
-                FileTask&  t     = it->second;
+                if (it == m_taskId2FileTasks.end()) return;
+                FileTask& t = it->second;
+                if (!t.file || !t.file->isOpen()) return; // 再次保命判断
+
                 QByteArray chunk = t.file->read(64 * 1024);
-                if (!chunk.isEmpty()) {
-                    m_client->sendFileData(9999, taskId, chunk);
-                    t.nowLoadSize += chunk.size();
-                    m_fileAll->updateProgress(taskId, t.nowLoadSize, t.totalSize);
-                }
-                if (t.nowLoadSize >= t.totalSize) { // 上传完毕
+                if (chunk.isEmpty()) {
                     t.sendTimer->stop();
                     t.file->close();
-                    t.file->deleteLater();
-                    t.file = nullptr;
-                    m_fileAll->updateStatus(taskId, "群文件上传完成");
-                    QJsonObject doneObj;
-                    doneObj["cmd"]      = "group_file_upload_done";
-                    doneObj["taskId"]   = (qint64)taskId;
-                    doneObj["fileName"] = t.fileName;
-                    doneObj["fileSize"] = t.totalSize;
-                    m_client->sendFrame(TYPE::CONTROL,
-                                        QJsonDocument(doneObj).toJson(QJsonDocument::Compact));
+                    m_fileAll->updateStatus(taskId, "上传完成");
+                    QString msg =
+                        QString("[群文件] 我上传了: %1，大家可以去拉取下载了！").arg(t.fileName);
+                    m_client->sendGroupText(msg);
+                    return;
                 }
+
+                QByteArray nameBuf = t.fileName.toUtf8();
+                nameBuf.resize(64); // 必须定长64字节
+                QByteArray payload;
+                payload.append(nameBuf);
+                payload.append(chunk);
+
+                m_client->sendFileData(9999, taskId, payload);
+
+                t.nowLoadSize += chunk.size();
+                m_fileAll->updateProgress(taskId, t.nowLoadSize, t.totalSize);
             });
-            task.sendTimer->start(1);
+            mapTask.sendTimer->start(10);
+            continue;
         }
-        else { // === 以前的单聊发送逻辑 ===
-            m_fileAll->addTask(taskId, task.fileName, task.totalSize, true);
-            m_client->sendFileReq(m_chatWithId, taskId, task.fileName, task.totalSize);
-        }
+
+        // 单聊逻辑
+        m_fileAll->addTask(taskId, mapTask.fileName, mapTask.totalSize, true);
+        m_client->sendFileReq(m_chatWithId, taskId, mapTask.fileName, mapTask.totalSize);
     }
+
     m_fileAll->show();
     m_fileAll->raise();
 }
-
 
 
 void MainWindow::fileReqReceived(uint32_t fromId, uint32_t taskId, const QString& fileName,
@@ -551,10 +573,9 @@ void MainWindow::fileDataReceived(uint32_t fromId, uint32_t taskId, const QByteA
 
     if (!task.file || !task.file->isOpen()) return;
 
-    // ================= 【新增：群聊文件拉取特判】 =================
+    // === 新增：如果是下载群文件，注意要把 64 字节头部剔除，并且循环索要下一块！ ===
     if (fromId == 9999 || task.userId == 9999) {
-        // 剔除前64字节的名字头部，只写入纯数据
-        QByteArray pureData = data.mid(64);
+        QByteArray pureData = data.mid(64); // 剔除头部名字
         task.file->write(pureData);
         task.nowLoadSize += pureData.size();
         m_fileAll->updateProgress(taskId, task.nowLoadSize, task.totalSize);
@@ -563,7 +584,7 @@ void MainWindow::fileDataReceived(uint32_t fromId, uint32_t taskId, const QByteA
             task.file->close();
             task.file->deleteLater();
             task.file = nullptr;
-            m_fileAll->updateStatus(taskId, "群文件下载完成！");
+            m_fileAll->updateStatus(taskId, "下载完成！");
             createSingleMessageWidget(QString("[群系统] 群文件接收完毕: %1").arg(task.fileName),
                                       QDateTime::currentDateTime().toString("HH:mm:ss"));
         }
@@ -573,13 +594,14 @@ void MainWindow::fileDataReceived(uint32_t fromId, uint32_t taskId, const QByteA
             obj["cmd"]      = "pull_group_file";
             obj["fileName"] = task.fileName;
             obj["offset"]   = (qint64)task.nowLoadSize; // 接着目前的进度要
+            obj["taskId"] =
+                (qint64)taskId; // 【关键修复 4】：循环要下一块的时候，依然要带上任务 ID！
             m_client->sendFrame(TYPE::CONTROL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
         }
-        return; // 处理完群聊直接返回，不走下面的私聊逻辑
+        return; // 处理完群聊直接退出，不走下面的私聊逻辑
     }
-    // ==========================================================
 
-    // 以下是原来的私聊接收逻辑
+    // === 原来的私聊写入逻辑 ===
     task.file->write(data);
     task.nowLoadSize += data.size();
     m_fileAll->updateProgress(taskId, task.nowLoadSize, task.totalSize);
@@ -607,6 +629,6 @@ void MainWindow::on_btnGroupFiles_clicked()
     }
     QJsonObject obj;
     obj["cmd"] = "get_group_files";
-    m_client->sendFrame(TYPE::CONTROL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    m_client->sendFrame(TYPE::FILE_CTRL, QJsonDocument(obj).toJson(QJsonDocument::Compact));
     m_fileAll->show();
 }
