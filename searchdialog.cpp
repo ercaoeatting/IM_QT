@@ -21,8 +21,8 @@ static void parseForSearch(const QString& raw, QString& sender, QString& plain)
         plain = s;
     }
 }
-SearchDialog::SearchDialog(const std::vector<QString>& history, const QString& peerName,
-                           QWidget* parent)
+SearchDialog::SearchDialog(const std::vector<std::pair<QString, QString>>& history,
+                           const QString& peerName, QWidget* parent)
     : QDialog(parent), ui(new Ui::SearchDialog), m_history(history)
 {
     ui->setupUi(this);
@@ -44,7 +44,7 @@ void SearchDialog::on_buttonFind_clicked()
 
     ui->res->clear(); // 清空上次的搜索结果
     int matchCount = 0;
-    for (const QString& msg : m_history) {
+    for (const auto [_, msg] : m_history) {
         QString sender, text;
         parseForSearch(msg, sender, text);
         if (text.contains(keyword, Qt::CaseInsensitive)) {

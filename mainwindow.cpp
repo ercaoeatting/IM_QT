@@ -126,8 +126,9 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
     });
     connect(m_client, &ChatClient::groupMessageReceived, this, [this](const QString& text) {
         QString message = QString("%1").arg(text.toHtmlEscaped());
-        m_client->m_history[9999].push_back(message);
-        if (m_chatWithId == 9999) { createSingleMessageWidget(message); }
+        QString timeStr = QDateTime::currentDateTime().toString("HH:mm:ss");
+        m_client->m_history[9999].push_back({timeStr, message});
+        if (m_chatWithId == 9999) { createSingleMessageWidget(message, timeStr); }
     });
     connect(m_client, &ChatClient::privateMessageReceived, this,
             [this](uint32_t fromId, const QString& text) {
@@ -140,10 +141,14 @@ MainWindow::MainWindow(QWidget* parent, ChatClient* client)
                 }
                 // 防止自聊时重复存入历史记录（因为 send 按钮已经存过一次了）
                 if (fromId != m_client->m_userId) {
-                    m_client->m_history[fromId].push_back(message);
+                    m_client->m_history[fromId].push_back(
+                        {QDateTime::currentDateTime().toString("HH:mm:ss"), message});
                 }
 
-                if (m_chatWithId == fromId) { createSingleMessageWidget(message); }
+                if (m_chatWithId == fromId) {
+                    createSingleMessageWidget(message,
+                                              QDateTime::currentDateTime().toString("HH:mm:ss"));
+                }
             });
     connect(ui->chat->model(), &QAbstractItemModel::rowsInserted, ui->chat,
             &QListWidget::scrollToBottom);
@@ -213,7 +218,7 @@ void MainWindow::switchChat(uint32_t peerId, const QString& peerName)
     ui->chat->clear();
     if (m_client->m_history.contains(peerId)) {
         const auto& history = m_client->m_history[peerId];
-        for (const QString& msg : history) { createSingleMessageWidget(msg); }
+        for (const auto& pair : history) { createSingleMessageWidget(pair.second, pair.first); }
     }
     ui->chat->setUpdatesEnabled(true);
     ui->chat->scrollToBottom();
@@ -243,7 +248,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
     }
     return QWidget::eventFilter(watched, event);
 }
-void MainWindow::createSingleMessageWidget(const QString& otext)
+void MainWindow::createSingleMessageWidget(const QString& otext, const QString& timeStr)
 {
     bool    isMe = false;
     QString senderId, text;
@@ -256,7 +261,6 @@ void MainWindow::createSingleMessageWidget(const QString& otext)
     mainLayout->setSpacing(2); // 信息栏和气泡紧凑一点
 
     // --- 1. 信息栏 (用户名 + 时间) ---
-    QString timeStr   = QDateTime::currentDateTime().toString("HH:mm:ss");
     QLabel* infoLabel = new QLabel(QString("%1  %2").arg(senderId).arg(timeStr));
     infoLabel->setStyleSheet("color: #888; font-size: 10px;");
 
@@ -306,9 +310,12 @@ void MainWindow::on_buttonSend_clicked()
 
     QString message = QString("[me] %1").arg(text.toHtmlEscaped());
 
-    m_client->m_history[m_chatWithId].push_back(message);
+    m_client->m_history[m_chatWithId].push_back(
+        {QDateTime::currentDateTime().toString("HH:mm:ss"), message});
 
-    if (m_chatWithId != m_client->m_userId) { createSingleMessageWidget(message); }
+    if (m_chatWithId != m_client->m_userId) {
+        createSingleMessageWidget(message, QDateTime::currentDateTime().toString("HH:mm:ss"));
+    }
 
     ui->textEditInput->clear();
 
@@ -433,7 +440,8 @@ void MainWindow::fileRespReceived(uint32_t fromId, uint32_t taskId, const QStrin
             t.file->deleteLater();
             t.file = nullptr;
             m_fileAll->updateStatus(taskId, "发送完成！");
-            createSingleMessageWidget(QString("[me] 文件发送完成: %1").arg(t.fileName));
+            createSingleMessageWidget(QString("[me] 文件发送完成: %1").arg(t.fileName),
+                                      QDateTime::currentDateTime().toString("HH:mm:ss"));
         }
     });
 
@@ -477,7 +485,8 @@ void MainWindow::fileDataReceived(uint32_t fromId, uint32_t taskId, const QByteA
         task.file = nullptr;
         m_fileAll->updateStatus(taskId, "接收完成！");
         createSingleMessageWidget(
-            QString("[%1] 发来的文件接收完毕: %2").arg(fromId).arg(task.fileName));
+            QString("[%1] 发来的文件接收完毕: %2").arg(fromId).arg(task.fileName),
+            QDateTime::currentDateTime().toString("HH:mm:ss"));
     }
 }
 void MainWindow::on_pushButton_clicked()

@@ -9,8 +9,8 @@
 #include <QFile>
 #include <QLabel>
 #include <QDateTime>
+#include <QPair>
 #include <unordered_map>
-
 #include "chatclient.h"
 #include "filedialog.h"
 
@@ -55,7 +55,7 @@ private:
     int32_t m_chatWithId   = 0;                                // 当前正在聊天的用户ID
     QString m_chatWithName = "";                               // 当前正在聊天的用户名字
     void switchChat(uint32_t peerId, const QString& peerName); // 切换聊天对象，更新界面标题
-    void createSingleMessageWidget(const QString& text);
+    void createSingleMessageWidget(const QString& text, const QString& timeStr);
     // 文件任务管理
     struct FileTask {
         uint32_t taskId;                // 任务唯一标识

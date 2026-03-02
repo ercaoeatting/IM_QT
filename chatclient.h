@@ -27,8 +27,8 @@ public:
         uint32_t id = 0;
         QString  name;
     };
-    std::unordered_map<uint32_t, std::vector<QString>>
-        m_history; // 聊天记录，key为对方ID，value为消息列表
+    std::unordered_map<uint32_t, std::vector<QPair<QString, QString>>> m_history;
+    // 聊天记录，key为对方ID，value为{时间戳,消息列表}
     explicit ChatClient(QObject* parent = nullptr);
     ~ChatClient();
 
