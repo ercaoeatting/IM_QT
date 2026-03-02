@@ -46,12 +46,13 @@ public:
                       bool accept);
     void sendFileDeny(uint32_t toId, uint32_t taskId);
     void sendFileData(uint32_t toId, uint32_t taskId, const QByteArray& data);
+    void sendFrame(TYPE type, const QByteArray& payload);
 
 signals:
     void connected();
     void disconnected();
     void errorOccurred(int socketError, const QString& errorString);
-
+    void groupFileListReceived(const QJsonArray& files);
     // 群聊文本
     void groupMessageReceived(const QString& text);
     // 私聊文本
@@ -77,7 +78,6 @@ private slots:
 private:
     static QByteArray packFrame(TYPE type, const QByteArray& payload);
     bool              tryParse(TYPE& type, QByteArray& payload);
-    void              sendFrame(TYPE type, const QByteArray& payload);
     // 解析控制消息
     void handleControlJson(const QByteArray& payload);
     // 解析私聊消息

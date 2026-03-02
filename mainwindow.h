@@ -46,6 +46,8 @@ private slots:
 
     void on_pushButton_clicked();
 
+    void on_btnGroupFiles_clicked();
+
 private:
     Ui::MainWindow* ui;
     ChatClient*     m_client; // 客户端实例，从登录窗口传入，window不创建它
@@ -77,5 +79,6 @@ private:
         return (uint32_t)(QDateTime::currentMSecsSinceEpoch() % 1000000000) + (rand() % 1000);
     }
     FileDialog* m_fileAll = nullptr;
+    void        onFileDataReceived(uint32_t fromId, uint32_t taskId, const QByteArray& data);
 };
 #endif // MAINWINDOW_H

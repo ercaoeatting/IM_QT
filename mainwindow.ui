@@ -126,6 +126,31 @@
             </widget>
            </item>
            <item>
+            <widget class="QPushButton" name="btnGroupFiles">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>120</width>
+               <height>89</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>120</width>
+               <height>89</height>
+              </size>
+             </property>
+             <property name="text">
+              <string>群文件</string>
+             </property>
+            </widget>
+           </item>
+           <item>
             <widget class="QPushButton" name="pushButton">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
@@ -214,7 +239,7 @@ ctrl+enter</string>
      <x>0</x>
      <y>0</y>
      <width>1056</width>
-     <height>22</height>
+     <height>25</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuExit">

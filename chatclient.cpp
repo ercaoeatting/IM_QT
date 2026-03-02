@@ -222,6 +222,12 @@ void ChatClient::handleControlJson(const QByteArray& payload)
         emit serverError(obj.value("reason").toString());
         return;
     }
+    else if (cmd == "group_files_list") {
+        if (obj.contains("files") && obj.value("files").isArray()) {
+            QJsonArray files = obj.value("files").toArray();
+            emit       groupFileListReceived(files);
+        }
+    }
 }
 
 void ChatClient::handleFileCtlJson(const QByteArray& payload)

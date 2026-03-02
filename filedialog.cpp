@@ -93,6 +93,7 @@ void FileDialog::addTask(uint32_t taskId, const QString& fileName, int totalSize
     ui->tableWidget->setCellWidget(row, 4, actionWidget);
 }
 
+
 // 更新指定任务的进度条
 void FileDialog::updateProgress(uint32_t taskId, int transferred, int totalSize)
 {
