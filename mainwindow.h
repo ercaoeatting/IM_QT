@@ -79,6 +79,5 @@ private:
         return (uint32_t)(QDateTime::currentMSecsSinceEpoch() % 1000000000) + (rand() % 1000);
     }
     FileDialog* m_fileAll = nullptr;
-    void        onFileDataReceived(uint32_t fromId, uint32_t taskId, const QByteArray& data);
 };
 #endif // MAINWINDOW_H
